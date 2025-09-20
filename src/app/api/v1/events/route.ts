@@ -58,7 +58,7 @@ export const POST = async (req: NextRequest) => {
     const currentData = new Date()
     const currentMonth = currentData.getMonth() + 1
     const currentYear = currentData.getFullYear()
-
+    
     const quota = await db.quota.findUnique({
       where: {
         userId: user.id,
@@ -80,6 +80,18 @@ export const POST = async (req: NextRequest) => {
         },
         { status: 429 }
       )
+    }
+
+    // Check if Discord Bot Token is available
+    if (!process.env.DISCORD_BOT_TOKEN) {
+      console.error("DISCORD_BOT_TOKEN is not set in environment variables");
+      return NextResponse.json(
+        { 
+          message: "Event received but notification delivery is not configured properly",
+          success: true 
+        }, 
+        { status: 202 }
+      );
     }
 
     const discord = new DiscordClient(process.env.DISCORD_BOT_TOKEN)
