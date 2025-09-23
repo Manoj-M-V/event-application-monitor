@@ -46,9 +46,10 @@ export const CategoryPageContent = ({
 }: CategoryPageContentProps) => {
   const searchParams = useSearchParams()
 
-  const [activeTab, setActiveTab] = useState<"today" | "week" | "month">(
-    "today"
-  )
+  const [activeTab, setActiveTab] = useState<"today" | "week" | "month">("today")
+  const [showInsights, setShowInsights] = useState(false)
+  const [insights, setInsights] = useState<{ analytics: any; serp?: any; suggestion: string } | null>(null)
+  const [loadingInsights, setLoadingInsights] = useState(false)
 
   // https://localhost:3000/dashboard/category/sale?page=5&limit=30
   const page = parseInt(searchParams.get("page") || "1", 10)
@@ -319,6 +320,24 @@ export const CategoryPageContent = ({
           <div className="w-full flex flex-col gap-4">
             <Heading className="text-3xl">Event overview</Heading>
           </div>
+          <Button variant="outline" onClick={async () => {
+            setShowInsights(true)
+            setLoadingInsights(true)
+            try {
+              const res = await fetch("/api/agent", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ category: category.name, userId: category.userId })
+              })
+              const data = await res.json()
+              setInsights(data)
+            } catch (err) {
+              setInsights({ analytics: null, suggestion: "Error fetching insights." })
+            }
+            setLoadingInsights(false)
+          }}>
+            Get Insights
+          </Button>
         </div>
 
         <Card contentClassName="px-6 py-4">
@@ -397,6 +416,48 @@ export const CategoryPageContent = ({
           Next
         </Button>
       </div>
-    </div>
+    {/* Insights Modal */}
+    {showInsights && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+        <div className="bg-white rounded-lg shadow-lg p-4 max-w-md w-full relative" style={{ maxHeight: '80vh', overflowY: 'auto' }}>
+          <button className="absolute top-2 right-2 text-gray-500" onClick={() => setShowInsights(false)}>
+            &times;
+          </button>
+          <Heading className="mb-4 text-xl">AI Insights & Analytics</Heading>
+          {loadingInsights ? (
+            <div>Loading...</div>
+          ) : insights ? (
+            <>
+              <div className="mb-4">
+                <strong>Analytics:</strong>
+                <pre className="bg-gray-100 p-2 rounded text-xs overflow-x-auto mb-2">{JSON.stringify(insights.analytics, null, 2)}</pre>
+              </div>
+              <div className="mb-4">
+                <strong>Relevant News & Events:</strong>
+                {insights.serp?.results && insights.serp.results.length > 0 ? (
+                  <ul className="list-disc ml-6">
+                    {insights.serp.results.map((item: any, idx: number) => (
+                      <li key={idx} className="mb-2">
+                        <a href={item.link || item.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline text-xs">{item.title || item.source || "News/Event"}</a>
+                        {item.snippet && <span className="ml-2 text-gray-700 text-xs">{item.snippet}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="text-gray-500 text-xs">No news/events found.</div>
+                )}
+              </div>
+              <div>
+                <strong>AI Suggestion:</strong>
+                <p className="mt-2 text-brand-700 font-semibold whitespace-pre-line text-xs">{insights.suggestion}</p>
+              </div>
+            </>
+          ) : (
+            <div className="text-xs">No insights available.</div>
+          )}
+        </div>
+      </div>
+    )}
+  </div>
   )
 }

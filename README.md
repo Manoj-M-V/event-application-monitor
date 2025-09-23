@@ -20,3 +20,11 @@ DISCORD_BOT_TOKEN=MTM4MjQxMDk2MzQ1NzgwNjM4Ng.GGEgpo.44IH2CTzwshtiR96XFwGgCOXlBBt
 
 # PAYMENTS - This comes from stripe as shown in video
 STRIPE_SECRET_KEY=sk_test_51NKETpSAs2gIl6CZhrxPiDPzsFIEixe080hXznwui32PFXcZh3SHoemDrCoLWvkMWMiGmSc44YaPHH7EG79nNC7l00KgWeBK3x
+
+
+
+
+
+git add .
+git commit -m 'readme update'
+git push -u major main
