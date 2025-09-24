@@ -8,7 +8,7 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { client } from "@/lib/client"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card } from "@/components/ui/card"
-import { ArrowUpDown, BarChart } from "lucide-react"
+import { ArrowUpDown, BarChart, Brain, Loader2, X } from "lucide-react"
 import { isAfter, isToday, startOfMonth, startOfWeek } from "date-fns"
 
 import {
@@ -40,6 +40,32 @@ interface CategoryPageContentProps {
   category: EventCategory
 }
 
+// Define the expected response type from the backend
+interface BusinessInsightsResponse {
+  success: boolean
+  category: string
+  analytics: {
+    totalEvents: number
+    recentEvents: any[]
+    trends?: {
+      last30Days: number
+      last7Days: number
+      dailyAverage: number
+      weeklyTrend: 'up' | 'down'
+    }
+    categoryMetrics?: {
+      successRate: number
+      failureRate: number
+      totalSuccessful: number
+      totalFailed: number
+    }
+  }
+  insights: string
+  generatedAt: string
+  error?: string
+  message?: string
+}
+
 export const CategoryPageContent = ({
   hasEvents: initialHasEvents,
   category,
@@ -48,8 +74,9 @@ export const CategoryPageContent = ({
 
   const [activeTab, setActiveTab] = useState<"today" | "week" | "month">("today")
   const [showInsights, setShowInsights] = useState(false)
-  const [insights, setInsights] = useState<{ analytics: any; serp?: any; suggestion: string } | null>(null)
+  const [insights, setInsights] = useState<BusinessInsightsResponse | null>(null)
   const [loadingInsights, setLoadingInsights] = useState(false)
+  const [insightsError, setInsightsError] = useState<string | null>(null)
 
   // https://localhost:3000/dashboard/category/sale?page=5&limit=30
   const page = parseInt(searchParams.get("page") || "1", 10)
@@ -168,7 +195,6 @@ export const CategoryPageContent = ({
   })
 
   /**
-   * I FORGOT THIS IN THE VIDEO
    * Update URL when pagination changes
    */
   const router = useRouter()
@@ -179,10 +205,6 @@ export const CategoryPageContent = ({
     searchParams.set("limit", pagination.pageSize.toString())
     router.push(`?${searchParams.toString()}`, { scroll: false })
   }, [pagination, router])
-  
-  /**
-   * END OF WHAT I FORGOT IN THE VIDEO
-   */
 
   const numericFieldSums = useMemo(() => {
     if (!data?.events || data.events.length === 0) return {}
@@ -271,6 +293,43 @@ export const CategoryPageContent = ({
     })
   }
 
+  const fetchBusinessInsights = async () => {
+    setShowInsights(true)
+    setLoadingInsights(true)
+    setInsightsError(null)
+    
+    try {
+      const response = await fetch("/api/business-intelligence", {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json" 
+        },
+        body: JSON.stringify({ 
+          category: category.name, 
+          userId: category.userId,
+          timeframe: "30d" // You can make this dynamic based on activeTab
+        })
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+
+      const data: BusinessInsightsResponse = await response.json()
+      
+      if (data.success) {
+        setInsights(data)
+      } else {
+        setInsightsError(data.error || "Failed to generate insights")
+      }
+    } catch (error) {
+      console.error("Error fetching insights:", error)
+      setInsightsError(error instanceof Error ? error.message : "Error fetching insights")
+    } finally {
+      setLoadingInsights(false)
+    }
+  }
+
   if (!pollingData.hasEvents) {
     return <EmptyCategoryState categoryName={category.name} />
   }
@@ -320,23 +379,18 @@ export const CategoryPageContent = ({
           <div className="w-full flex flex-col gap-4">
             <Heading className="text-3xl">Event overview</Heading>
           </div>
-          <Button variant="outline" onClick={async () => {
-            setShowInsights(true)
-            setLoadingInsights(true)
-            try {
-              const res = await fetch("/api/agent", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ category: category.name, userId: category.userId })
-              })
-              const data = await res.json()
-              setInsights(data)
-            } catch (err) {
-              setInsights({ analytics: null, suggestion: "Error fetching insights." })
-            }
-            setLoadingInsights(false)
-          }}>
-            Get Insights
+          <Button 
+            variant="outline" 
+            onClick={fetchBusinessInsights}
+            disabled={loadingInsights}
+            className="flex items-center gap-2"
+          >
+            {loadingInsights ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Brain className="size-4" />
+            )}
+            Get AI Insights
           </Button>
         </div>
 
@@ -416,48 +470,146 @@ export const CategoryPageContent = ({
           Next
         </Button>
       </div>
-    {/* Insights Modal */}
-    {showInsights && (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
-        <div className="bg-white rounded-lg shadow-lg p-4 max-w-md w-full relative" style={{ maxHeight: '80vh', overflowY: 'auto' }}>
-          <button className="absolute top-2 right-2 text-gray-500" onClick={() => setShowInsights(false)}>
-            &times;
-          </button>
-          <Heading className="mb-4 text-xl">AI Insights & Analytics</Heading>
-          {loadingInsights ? (
-            <div>Loading...</div>
-          ) : insights ? (
-            <>
-              <div className="mb-4">
-                <strong>Analytics:</strong>
-                <pre className="bg-gray-100 p-2 rounded text-xs overflow-x-auto mb-2">{JSON.stringify(insights.analytics, null, 2)}</pre>
+
+      {/* Enhanced Insights Modal */}
+      {showInsights && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full mx-4 relative" style={{ maxHeight: '90vh', overflowY: 'auto' }}>
+            <div className="flex items-center justify-between p-6 border-b">
+              <div className="flex items-center gap-2">
+                <Brain className="size-5 text-brand-600" />
+                <h2 className="text-xl font-semibold">AI Business Intelligence Report</h2>
               </div>
-              <div className="mb-4">
-                <strong>Relevant News & Events:</strong>
-                {insights.serp?.results && insights.serp.results.length > 0 ? (
-                  <ul className="list-disc ml-6">
-                    {insights.serp.results.map((item: any, idx: number) => (
-                      <li key={idx} className="mb-2">
-                        <a href={item.link || item.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline text-xs">{item.title || item.source || "News/Event"}</a>
-                        {item.snippet && <span className="ml-2 text-gray-700 text-xs">{item.snippet}</span>}
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <div className="text-gray-500 text-xs">No news/events found.</div>
-                )}
-              </div>
-              <div>
-                <strong>AI Suggestion:</strong>
-                <p className="mt-2 text-brand-700 font-semibold whitespace-pre-line text-xs">{insights.suggestion}</p>
-              </div>
-            </>
-          ) : (
-            <div className="text-xs">No insights available.</div>
-          )}
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                onClick={() => setShowInsights(false)}
+                className="h-8 w-8 p-0"
+              >
+                <X className="size-4" />
+              </Button>
+            </div>
+
+            <div className="p-6">
+              {loadingInsights ? (
+                <div className="flex items-center justify-center py-12">
+                  <div className="text-center">
+                    <Loader2 className="size-8 animate-spin mx-auto mb-4 text-brand-600" />
+                    <p className="text-lg font-medium">Generating AI Insights...</p>
+                    <p className="text-sm text-muted-foreground">Analyzing your data and market trends</p>
+                  </div>
+                </div>
+              ) : insightsError ? (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="size-2 bg-red-500 rounded-full"></div>
+                    <h3 className="font-medium text-red-800">Error</h3>
+                  </div>
+                  <p className="text-red-700">{insightsError}</p>
+                </div>
+              ) : insights ? (
+                <div className="space-y-6">
+                  {/* Analytics Overview */}
+                  <div className="bg-brand-50 border border-brand-200 rounded-lg p-4">
+                    <h3 className="font-semibold text-brand-800 mb-3 flex items-center gap-2">
+                      <BarChart className="size-4" />
+                      Analytics Overview
+                    </h3>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div className="text-center">
+                        <p className="text-2xl font-bold text-brand-700">
+                          {insights.analytics.totalEvents}
+                        </p>
+                        <p className="text-sm text-brand-600">Total Events</p>
+                      </div>
+                      {insights.analytics.trends && (
+                        <>
+                          <div className="text-center">
+                            <p className="text-2xl font-bold text-brand-700">
+                              {insights.analytics.trends.last7Days}
+                            </p>
+                            <p className="text-sm text-brand-600">Last 7 Days</p>
+                          </div>
+                          <div className="text-center">
+                            <p className="text-2xl font-bold text-brand-700">
+                              {insights.analytics.trends.dailyAverage.toFixed(1)}
+                            </p>
+                            <p className="text-sm text-brand-600">Daily Average</p>
+                          </div>
+                          <div className="text-center">
+                            <div className={cn(
+                              "text-2xl font-bold",
+                              insights.analytics.trends.weeklyTrend === 'up' 
+                                ? 'text-green-600' 
+                                : 'text-red-600'
+                            )}>
+                              {insights.analytics.trends.weeklyTrend === 'up' ? '↗' : '↘'}
+                            </div>
+                            <p className="text-sm text-brand-600">Trend</p>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Success Metrics */}
+                  {insights.analytics.categoryMetrics && (
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                      <h3 className="font-semibold text-green-800 mb-3">Performance Metrics</h3>
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                        <div className="text-center">
+                          <p className="text-2xl font-bold text-green-700">
+                            {insights.analytics.categoryMetrics.successRate.toFixed(1)}%
+                          </p>
+                          <p className="text-sm text-green-600">Success Rate</p>
+                        </div>
+                        <div className="text-center">
+                          <p className="text-2xl font-bold text-green-700">
+                            {insights.analytics.categoryMetrics.totalSuccessful}
+                          </p>
+                          <p className="text-sm text-green-600">Successful</p>
+                        </div>
+                        <div className="text-center">
+                          <p className="text-2xl font-bold text-red-600">
+                            {insights.analytics.categoryMetrics.totalFailed}
+                          </p>
+                          <p className="text-sm text-red-500">Failed</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* AI Insights Report */}
+                  <div className="border rounded-lg p-4">
+                    <h3 className="font-semibold mb-3 flex items-center gap-2">
+                      <Brain className="size-4" />
+                      AI-Generated Business Intelligence Report
+                    </h3>
+                    <div className="prose max-w-none">
+                      <div 
+                        className="text-sm leading-relaxed whitespace-pre-line"
+                        dangerouslySetInnerHTML={{ 
+                          __html: insights.insights.replace(/\n/g, '<br />') 
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Report Metadata */}
+                  <div className="text-xs text-muted-foreground border-t pt-4">
+                    <p>Report generated on {new Date(insights.generatedAt).toLocaleString()}</p>
+                    <p>Category: {insights.category}</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center py-8">
+                  <p className="text-muted-foreground">No insights available.</p>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
-      </div>
-    )}
-  </div>
+      )}
+    </div>
   )
 }
