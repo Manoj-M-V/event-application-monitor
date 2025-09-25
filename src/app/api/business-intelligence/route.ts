@@ -20,21 +20,27 @@ export async function POST(req: Request) {
       );
     }
 
-    // 1. Retrieve enhanced dashboard data from DB
-    const categoryData = await db.eventCategory.findUnique({
-      where: {
-        name_userId: {
-          name: category,
-          userId,
+    // 1. Retrieve enhanced dashboard data and user context from DB
+    const [categoryData, userData] = await Promise.all([
+      db.eventCategory.findUnique({
+        where: {
+          name_userId: {
+            name: category,
+            userId,
+          },
         },
-      },
-      include: {
-        events: {
-          orderBy: { createdAt: "desc" },
-          take: 50,
+        include: {
+          events: {
+            orderBy: { createdAt: "desc" },
+            take: 50,
+          },
         },
-      },
-    });
+      }),
+      db.user.findUnique({
+        where: { id: userId },
+        select: { businessDescription: true }
+      })
+    ]);
 
     if (!categoryData) {
       return NextResponse.json(
@@ -67,6 +73,7 @@ export async function POST(req: Request) {
         category,
         analytics,
         timeframe,
+        businessDescription: userData?.businessDescription ?? undefined,
       };
 
       insights = await agent.generateBusinessInsights(businessContext);

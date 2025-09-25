@@ -19,6 +19,7 @@ export interface BusinessContext {
   analytics: AnalyticsType;
   timeframe: string;
   location?: string;
+  businessDescription?: string;
 }
 
 interface SerpResult {
@@ -155,21 +156,33 @@ async function searchCurrentEvents(query: string, category: string): Promise<Ser
 // Create a simple prompt template
 function createReactPrompt() {
   return PromptTemplate.fromTemplate(`
-You are a business intelligence analyst. Use the available tools to analyze business data and provide insights.
+You are an expert business intelligence analyst specializing in providing data-driven insights and recommendations. Your analysis should be specifically tailored to the business context and industry trends.
+
+BUSINESS CONTEXT:
+Category: {category}
+Business Description: {businessDescription}
+Timeframe: {timeframe}
 
 TOOLS:
 {tools}
 
+When analyzing:
+1. Consider the specific business context and description
+2. Use real-world market data from SERP results
+3. Combine historical analytics with current market trends
+4. Provide actionable recommendations
+5. Consider seasonality and industry-specific factors
+
 Use the following format:
 
 Question: the input question you must answer
-Thought: you should always think about what to do
+Thought: you should always think about what to do, considering the business context
 Action: the action to take, should be one of [{tool_names}]
 Action Input: the input to the action
 Observation: the result of the action
 ... (this Thought/Action/Action Input/Observation can repeat N times)
 Thought: I now know the final answer
-Final Answer: the final answer to the original input question
+Final Answer: the final answer to the original input question, with context-aware insights
 
 Question: {input}
 Thought:{agent_scratchpad}
@@ -195,6 +208,30 @@ class BusinessRAGSystem {
       console.error("Failed to initialize vector store:", error);
       throw error;
     }
+  }
+
+  private async searchIndustryTrends(category: string, businessDescription?: string): Promise<Document[]> {
+    const query = businessDescription 
+      ? `${category} business trends ${businessDescription}`
+      : `${category} business market trends`;
+      
+    const serpResults = await searchCurrentEvents(query, category);
+    
+    if (serpResults.error || !serpResults.results) {
+      console.warn("Failed to fetch SERP results:", serpResults.error);
+      return [];
+    }
+
+    // Convert SERP results to documents for RAG
+    return serpResults.results.map(result => new Document({
+      pageContent: `${result.title}\n${result.snippet}`,
+      metadata: {
+        source: result.source,
+        date: result.date,
+        relevanceScore: result.relevanceScore,
+        url: result.link
+      }
+    }));
   }
 
   public async retrieveRelevantContext(query: string, k = 5): Promise<Document[]> {
@@ -339,13 +376,30 @@ export class BusinessIntelligenceAgent {
 
   async generateBusinessInsights(context: BusinessContext): Promise<string> {
     try {
-      const serpResults = await searchCurrentEvents(
-        `${context.category} business trends market analysis`,
-        context.category
-      );
+      // 1. Enhanced SERP search with business description
+      const businessQuery = context.businessDescription
+        ? `${context.category} business trends market analysis ${context.businessDescription}`
+        : `${context.category} business trends market analysis`;
 
-      if (serpResults.error) {
-        console.warn("SERP search failed:", serpResults.error);
+      const [generalTrends, specificTrends] = await Promise.all([
+        searchCurrentEvents(businessQuery, context.category),
+        context.businessDescription
+          ? searchCurrentEvents(
+              `${context.businessDescription} industry insights market analysis`,
+              context.category
+            )
+          : Promise.resolve({ results: [] })
+      ]);
+
+      const serpResults = {
+        results: [
+          ...(generalTrends.results || []),
+          ...(specificTrends.results || [])
+        ].sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0))
+      };
+
+      if (!serpResults.results.length) {
+        console.warn("SERP search failed or returned no results");
       }
 
       const documents = await this.ragSystem.prepareDocuments(
@@ -354,21 +408,32 @@ export class BusinessIntelligenceAgent {
         context.category
       );
 
+      // Add business description as a document if available
+      if (context.businessDescription) {
+        documents.unshift(new Document({
+          pageContent: `Business Description: ${context.businessDescription}`,
+          metadata: { source: "business_profile", type: "context" }
+        }));
+      }
+
       await this.ragSystem.initializeVectorStore(documents);
 
       const query = `
       As a business intelligence analyst, analyze the following business context and provide actionable insights:
       
       Business Category: ${context.category}
+      ${context.businessDescription ? `Business Description: ${context.businessDescription}\n` : ''}
       Total Events: ${context.analytics.totalEvents}
+      Timeframe: ${context.timeframe}
       
-      Please provide:
-      1. Analysis of current business performance
-      2. Identification of trends and patterns
-      3. Actionable recommendations for business growth
-      4. Seasonal opportunities and market insights
+      Consider the specific nature of this business while analyzing:
+      1. Current business performance in the context of their specific market
+      2. Industry-specific trends and patterns
+      3. Actionable recommendations tailored to their business model
+      4. Seasonal opportunities and market insights relevant to their sector
+      5. Competitive analysis based on market research
       
-      Format your response as a comprehensive business intelligence report with specific recommendations.
+      Format your response as a comprehensive business intelligence report with specific, contextualized recommendations.
       `;
 
       if (this.agent) {
@@ -387,6 +452,8 @@ export class BusinessIntelligenceAgent {
     return `
 # Business Intelligence Report for ${context.category}
 
+${context.businessDescription ? `## Business Context\n${context.businessDescription}\n\n` : ''}
+
 ## Executive Summary
 ${agentOutput}
 
@@ -394,9 +461,11 @@ ${agentOutput}
 - Total Events: ${context.analytics.totalEvents}
 - Analysis Period: ${context.timeframe || 'Recent activity'}
 - Category: ${context.category}
+${context.analytics.trends ? `- Trend: ${context.analytics.trends.weeklyTrend === 'up' ? '📈 Increasing' : '📉 Decreasing'}` : ''}
+${context.analytics.categoryMetrics ? `- Success Rate: ${context.analytics.categoryMetrics.successRate.toFixed(1)}%` : ''}
 
-## Recommendations
-Based on current market analysis and your business data, here are the key action items:
+## Market Analysis & Recommendations
+Based on your specific business context and current market analysis, here are the key action items:
 
 ${this.extractRecommendations(agentOutput)}
 

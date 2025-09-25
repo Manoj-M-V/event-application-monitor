@@ -23,11 +23,12 @@ model User {
   quotaLimit Int
   plan       Plan @default(FREE)
 
-  email     String   @unique
-  apiKey    String   @unique @default(cuid())
-  discordId String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  email              String   @unique
+  apiKey             String   @unique @default(cuid())
+  discordId          String?
+  businessDescription String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   EventCategories EventCategory[]
   events           Event[]

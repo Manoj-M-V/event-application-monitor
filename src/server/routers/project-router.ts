@@ -51,4 +51,18 @@ export const projectRouter = router({
 
       return c.json({ success: true })
     }),
+
+  setBusinessDescription: privateProcedure
+    .input(z.object({ businessDescription: z.string().max(2000) }))
+    .mutation(async ({ c, ctx, input }) => {
+      const { user } = ctx
+      const { businessDescription } = input
+
+      await db.user.update({
+        where: { id: user.id },
+        data: { businessDescription },
+      })
+
+      return c.json({ success: true })
+    }),
 })

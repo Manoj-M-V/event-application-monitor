@@ -21,7 +21,10 @@ const Page = async () => {
 
   return (
     <DashboardPage title="Account Settings">
-      <AccountSettings discordId={user.discordId ?? ""} />
+      <AccountSettings 
+        discordId={user.discordId ?? ""} 
+        businessDescription={user.businessDescription ?? ""}
+      />
     </DashboardPage>
   )
 }
