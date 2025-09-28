@@ -1,10 +1,23 @@
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { DynamicTool } from "@langchain/core/tools";
 import { AgentExecutor, createReactAgent } from "langchain/agents";
-import { PromptTemplate } from "@langchain/core/prompts";
 import { Document } from "@langchain/core/documents";
 import { MemoryVectorStore } from "langchain/vectorstores/memory";
 import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
+import { PromptTemplate } from "@langchain/core/prompts";
+import { createAgentPrompt, createBusinessPrompt } from "./prompts";
+import { analyzeSeasonalContext, extractLocation } from "@/lib/seasonal-analysis";
+import { generateMarketQueries, aggregateMarketResearch } from "@/lib/market-research";
+import { generateEnhancedAnalysis } from "@/lib/business-intelligence";
+import { createReportTemplate } from "@/lib/report-template";
+import { 
+  ENHANCED_SYSTEM_PROMPT,
+  createEnhancedAnalysisPrompt,
+  createSeasonalStrategyPrompt,
+  createCustomerInsightPrompt,
+  INSIGHT_VALIDATION_PROMPT,
+  OUTPUT_ENHANCEMENT_PROMPT
+} from "@/lib/enhanced-prompts";
 
 // Types
 export interface AnalyticsType {
@@ -64,34 +77,14 @@ export function calculateCategoryMetrics(events: any[]) {
 }
 
 export function generateFallbackAnalysis(category: string, analytics: any): string {
-  const trends = analytics.trends;
-  const metrics = analytics.categoryMetrics;
-  let analysis = `# Business Analysis for ${category}\n\n`;
-  analysis += `## Current Status\n`;
-  analysis += `Your ${category} business has recorded ${analytics.totalEvents} total events.\n\n`;
-  if (trends) {
-    analysis += `## Activity Trends\n`;
-    analysis += `- Last 7 days: ${trends.last7Days} events\n`;
-    analysis += `- Last 30 days: ${trends.last30Days} events\n`;
-    analysis += `- Daily average: ${trends.dailyAverage.toFixed(1)} events\n`;
-    analysis += `- Weekly trend: ${trends.weeklyTrend === 'up' ? '📈 Increasing' : '📉 Decreasing'}\n\n`;
-  }
-  if (metrics) {
-    analysis += `## Performance Metrics\n`;
-    analysis += `- Success rate: ${metrics.successRate.toFixed(1)}%\n`;
-    analysis += `- Successful events: ${metrics.totalSuccessful}\n`;
-    analysis += `- Failed events: ${metrics.totalFailed}\n\n`;
-  }
-  analysis += `## General Recommendations\n`;
-  analysis += `- Monitor seasonal trends that affect your ${category} business\n`;
-  analysis += `- Keep track of local events and festivals that might increase demand\n`;
-  analysis += `- Analyze your recent customer activity patterns\n`;
-  analysis += `- Consider promotional strategies during peak periods\n\n`;
-  if (metrics && metrics.failureRate > 10) {
-    analysis += `⚠️ **Action Required**: Your failure rate is ${metrics.failureRate.toFixed(1)}%. Consider investigating delivery issues.\n\n`;
-  }
-  analysis += `*Basic analysis provided. For AI-powered insights, ensure GEMINI_API_KEY and GOOGLE_SERP_API_KEY are configured.*`;
-  return analysis;
+  const businessContext: BusinessContext = {
+    category,
+    analytics,
+    timeframe: '30d'
+  };
+  
+  // Use the enhanced analysis from our new module
+  return generateEnhancedAnalysis(businessContext);
 }
 
 // Utility functions
@@ -282,7 +275,10 @@ export class BusinessIntelligenceAgent {
     this.llm = new ChatGoogleGenerativeAI({
       apiKey: process.env.GEMINI_API_KEY!,
       model: "gemini-pro",
-      temperature: 0.3,
+      temperature: 0.7,  // Increased for more creative responses
+      maxOutputTokens: 2048,  // Increased for more detailed responses
+      topP: 0.9,  // More diverse token selection
+      topK: 40,   // Broader token consideration
     });
     
     this.ragSystem = new BusinessRAGSystem();
@@ -290,6 +286,15 @@ export class BusinessIntelligenceAgent {
 
   async initialize() {
     try {
+      // Verify API keys are present
+      if (!process.env.GEMINI_API_KEY) {
+        throw new Error("GEMINI_API_KEY is not configured");
+      }
+      
+      if (!process.env.GOOGLE_SERP_API_KEY) {
+        throw new Error("GOOGLE_SERP_API_KEY is not configured");
+      }
+
       const tools = [
         new DynamicTool({
           name: "search_current_events",
@@ -324,7 +329,7 @@ export class BusinessIntelligenceAgent {
         })
       ];
 
-      const prompt = createReactPrompt();
+      const prompt = createAgentPrompt();
       const agent = await createReactAgent({
         llm: this.llm,
         tools,
@@ -376,117 +381,201 @@ export class BusinessIntelligenceAgent {
 
   async generateBusinessInsights(context: BusinessContext): Promise<string> {
     try {
-      // 1. Enhanced SERP search with business description
-      const businessQuery = context.businessDescription
-        ? `${context.category} business trends market analysis ${context.businessDescription}`
-        : `${context.category} business trends market analysis`;
+      // 1. Extract location and analyze seasonal context
+      const location = context.businessDescription 
+        ? extractLocation(context.businessDescription)
+        : "All India";
 
-      const [generalTrends, specificTrends] = await Promise.all([
-        searchCurrentEvents(businessQuery, context.category),
-        context.businessDescription
-          ? searchCurrentEvents(
-              `${context.businessDescription} industry insights market analysis`,
-              context.category
-            )
-          : Promise.resolve({ results: [] })
-      ]);
-
-      const serpResults = {
-        results: [
-          ...(generalTrends.results || []),
-          ...(specificTrends.results || [])
-        ].sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0))
-      };
-
-      if (!serpResults.results.length) {
-        console.warn("SERP search failed or returned no results");
-      }
-
-      const documents = await this.ragSystem.prepareDocuments(
-        context.analytics,
-        serpResults.results || [],
-        context.category
+      const seasonalContext = analyzeSeasonalContext(
+        context.category,
+        location
       );
 
-      // Add business description as a document if available
+      // 2. Generate targeted market research queries
+      const marketQueries = generateMarketQueries(
+        context.category,
+        context.businessDescription || "",
+        seasonalContext,
+        location
+      );
+
+      // 3. Execute market research queries in parallel
+      const searchResults = await Promise.all(
+        marketQueries.map(query => searchCurrentEvents(query.query, context.category))
+      );
+
+      // 4. Aggregate and analyze market research
+      const marketResearch = aggregateMarketResearch(
+        searchResults.flatMap(result => result.results || []),
+        seasonalContext
+      );
+
+      // 5. Prepare RAG documents
+      const documents: Document[] = [];
+
+      // Add business profile
       if (context.businessDescription) {
-        documents.unshift(new Document({
+        documents.push(new Document({
           pageContent: `Business Description: ${context.businessDescription}`,
           metadata: { source: "business_profile", type: "context" }
         }));
       }
 
+      // Add seasonal context
+      documents.push(new Document({
+        pageContent: `Seasonal Analysis:\n${JSON.stringify(seasonalContext, null, 2)}`,
+        metadata: { source: "seasonal_analysis", type: "context" }
+      }));
+
+      // Add market research
+      documents.push(new Document({
+        pageContent: `Market Research:\n${JSON.stringify(marketResearch, null, 2)}`,
+        metadata: { source: "market_research", type: "context" }
+      }));
+
+      // Add analytics
+      documents.push(new Document({
+        pageContent: `Business Analytics:\n${JSON.stringify(context.analytics, null, 2)}`,
+        metadata: { source: "analytics", type: "data" }
+      }));
+
+      // Initialize vector store
       await this.ragSystem.initializeVectorStore(documents);
 
-      const query = `
-      As a business intelligence analyst, analyze the following business context and provide actionable insights:
-      
-      Business Category: ${context.category}
-      ${context.businessDescription ? `Business Description: ${context.businessDescription}\n` : ''}
-      Total Events: ${context.analytics.totalEvents}
-      Timeframe: ${context.timeframe}
-      
-      Consider the specific nature of this business while analyzing:
-      1. Current business performance in the context of their specific market
-      2. Industry-specific trends and patterns
-      3. Actionable recommendations tailored to their business model
-      4. Seasonal opportunities and market insights relevant to their sector
-      5. Competitive analysis based on market research
-      
-      Format your response as a comprehensive business intelligence report with specific, contextualized recommendations.
-      `;
+      // 6. Generate enhanced analysis prompts
+      const mainAnalysisPrompt = createEnhancedAnalysisPrompt(
+        context.category,
+        context.businessDescription || "",
+        location,
+        context.analytics,
+        seasonalContext,
+        marketResearch
+      );
 
-      if (this.agent) {
-        const result = await this.agent.invoke({ input: query });
-        return this.formatBusinessReport(result.output, context);
-      } else {
+      const seasonalPrompt = createSeasonalStrategyPrompt(
+        context.category,
+        seasonalContext.currentSeason?.name || "No specific season",
+        seasonalContext.upcomingFestivals.map(f => f.name),
+        location,
+        context.analytics
+      );
+
+      const customerPrompt = createCustomerInsightPrompt(
+        context.category,
+        context.analytics,
+        seasonalContext
+      );
+
+      if (!this.agent) {
         throw new Error("Agent not initialized");
       }
+
+      // 7. Generate multi-perspective analysis
+      const [mainAnalysis, seasonalAnalysis, customerAnalysis] = await Promise.all([
+        this.agent.invoke({ input: mainAnalysisPrompt }),
+        this.agent.invoke({ input: seasonalPrompt }),
+        this.agent.invoke({ input: customerPrompt })
+      ]);
+
+      // 8. Combine and enhance insights
+      const combinedAnalysis = `
+      MAIN BUSINESS ANALYSIS:
+      ${mainAnalysis.output}
+
+      SEASONAL STRATEGY:
+      ${seasonalAnalysis.output}
+
+      CUSTOMER INSIGHTS:
+      ${customerAnalysis.output}`;
+
+      // 9. Validate insights
+      const validationResult = await this.agent.invoke({
+        input: INSIGHT_VALIDATION_PROMPT.replace("{insights}", combinedAnalysis)
+      });
+
+      // 10. Final enhancement pass
+      const enhancedResult = await this.agent.invoke({
+        input: OUTPUT_ENHANCEMENT_PROMPT.replace("{output}", validationResult.output)
+      });
+
+      // 9. Format final report
+      return createReportTemplate(
+        context.businessDescription?.split(' ')[0] || context.category,
+        context.category,
+        {
+          summary: mainAnalysis.output,
+          marketAnalysis: marketResearch.trends.join("\n"),
+          seasonalInsights: seasonalContext.seasonalTrends.join("\n"),
+          competitionAnalysis: marketResearch.competitiveAnalysis.join("\n"),
+          riskAnalysis: this.extractRiskAnalysis(enhancedResult.output)
+        },
+        {
+          immediate: this.extractRecommendations(enhancedResult.output, "immediate"),
+          shortTerm: this.extractRecommendations(enhancedResult.output, "short-term"),
+          longTerm: this.extractRecommendations(enhancedResult.output, "long-term"),
+          roadmap: this.generateImplementationRoadmap(enhancedResult.output)
+        }
+      );
     } catch (error) {
       console.error("Agent execution failed:", error);
-      return this.fallbackAnalysis(context);
+      return generateFallbackAnalysis(context.category, context.analytics);
     }
   }
 
-  private formatBusinessReport(agentOutput: string, context: BusinessContext): string {
-    return `
-# Business Intelligence Report for ${context.category}
-
-${context.businessDescription ? `## Business Context\n${context.businessDescription}\n\n` : ''}
-
-## Executive Summary
-${agentOutput}
-
-## Key Metrics
-- Total Events: ${context.analytics.totalEvents}
-- Analysis Period: ${context.timeframe || 'Recent activity'}
-- Category: ${context.category}
-${context.analytics.trends ? `- Trend: ${context.analytics.trends.weeklyTrend === 'up' ? '📈 Increasing' : '📉 Decreasing'}` : ''}
-${context.analytics.categoryMetrics ? `- Success Rate: ${context.analytics.categoryMetrics.successRate.toFixed(1)}%` : ''}
-
-## Market Analysis & Recommendations
-Based on your specific business context and current market analysis, here are the key action items:
-
-${this.extractRecommendations(agentOutput)}
-
----
-*Report generated on ${new Date().toLocaleDateString()} using AI-powered business intelligence*
-    `.trim();
+  private extractRiskAnalysis(output: string): string {
+    // Implementation for extracting risk analysis from the output
+    return output
+      .split("\n")
+      .filter(line => line.toLowerCase().includes("risk") || line.toLowerCase().includes("challenge"))
+      .join("\n");
   }
 
-  private extractRecommendations(output: string): string {
-    const sentences = output.split(/[.!?]+/);
-    const recommendations = sentences
-      .filter(sentence => 
-        sentence.toLowerCase().includes('should') ||
-        sentence.toLowerCase().includes('recommend') ||
-        sentence.toLowerCase().includes('suggest') ||
-        sentence.toLowerCase().includes('consider')
-      )
-      .map(rec => `• ${rec.trim()}`)
-      .join('\n');
-    
-    return recommendations || "• Continue monitoring your business metrics\n• Stay updated with market trends\n• Consider seasonal opportunities";
+  private extractRecommendations(output: string, timeframe?: "immediate" | "short-term" | "long-term"): string {
+    if (timeframe) {
+      const lines = output.split("\n");
+      let collecting = false;
+      const recommendations: string[] = [];
+  
+      for (const line of lines) {
+        if (line.toLowerCase().includes(timeframe)) {
+          collecting = true;
+          continue;
+        }
+        if (collecting && line.trim() && !line.toLowerCase().includes("term")) {
+          recommendations.push(line.trim());
+        }
+        if (collecting && (line.toLowerCase().includes("term") || line.startsWith("#"))) {
+          break;
+        }
+      }
+  
+      return recommendations.join("\n");
+    } else {
+      const sentences = output.split(/[.!?]+/);
+      const recommendations = sentences
+        .filter(sentence => 
+          sentence.toLowerCase().includes('should') ||
+          sentence.toLowerCase().includes('recommend') ||
+          sentence.toLowerCase().includes('suggest') ||
+          sentence.toLowerCase().includes('consider')
+        )
+        .map(rec => `• ${rec.trim()}`)
+        .join('\n');
+      
+      return recommendations || "• Continue monitoring your business metrics\n• Stay updated with market trends\n• Consider seasonal opportunities";
+    }
+  }
+
+  private generateImplementationRoadmap(output: string): string {
+    return `Implementation Roadmap:
+1. Immediate Actions (Next 30 Days)
+${this.extractRecommendations(output, "immediate")}
+
+2. Short-term Goals (90 Days)
+${this.extractRecommendations(output, "short-term")}
+
+3. Long-term Strategy (6-12 Months)
+${this.extractRecommendations(output, "long-term")}`;
   }
 
   private fallbackAnalysis(context: BusinessContext): string {

@@ -66,6 +66,18 @@ export async function POST(req: Request) {
     // 3. Initialize and run the AI agent
     let insights: string;
     try {
+      // Verify required API keys
+      if (!process.env.GEMINI_API_KEY || !process.env.GOOGLE_SERP_API_KEY) {
+        throw new Error(
+          `Missing required API keys: ${[
+            !process.env.GEMINI_API_KEY && "GEMINI_API_KEY",
+            !process.env.GOOGLE_SERP_API_KEY && "GOOGLE_SERP_API_KEY",
+          ]
+            .filter(Boolean)
+            .join(", ")}`
+        );
+      }
+
       const agent = new BusinessIntelligenceAgent();
       await agent.initialize();
 
@@ -78,6 +90,17 @@ export async function POST(req: Request) {
 
       insights = await agent.generateBusinessInsights(businessContext);
     } catch (agentError) {
+      console.error("Agent Error:", agentError);
+      
+      if (agentError instanceof Error && 
+          agentError.message.includes("API key")) {
+        return NextResponse.json({
+          error: "Configuration Error",
+          message: agentError.message,
+          details: "Please ensure both GEMINI_API_KEY and GOOGLE_SERP_API_KEY are configured in your environment."
+        }, { status: 500 });
+      }
+      
       insights = generateFallbackAnalysis(category, analytics);
     }
 
