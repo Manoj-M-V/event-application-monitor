@@ -53,6 +53,7 @@ Perfect for:
 ## Tech Stack
 
 - **Language**: TypeScript (99.2%)
+- **Framework**: Next.js
 - **Database**: Prisma ORM
 - **Development**: Node.js environment
 
